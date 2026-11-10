@@ -39,6 +39,11 @@ dependencies:
   intl: any
   flutter_localizations:
     sdk: flutter
+  voges_updater:
+    git:
+      url: https://github.com/omanoloneto/voges-word.git
+      path: packages/voges_updater
+      ref: 392e8df8261a5c0dd0d2925d2aab0d830b608c33
 
 dev_dependencies:
   flutter_test:
