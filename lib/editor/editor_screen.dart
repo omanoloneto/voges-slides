@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:voges_updater/voges_updater.dart'
+    show LaunchResult, UpdateCheck, UpdateStatusChip, UpdaterLocalizations;
 import 'package:window_manager/window_manager.dart';
 
 import '../deck/deck_controller.dart';
@@ -40,6 +42,7 @@ class EditorScreen extends StatefulWidget {
     required this.language,
     required this.launchArguments,
     this.windowButtons = WindowButtonsLayout.right,
+    this.updates,
     super.key,
   });
 
@@ -49,6 +52,9 @@ class EditorScreen extends StatefulWidget {
   final AppLanguage language;
   final List<String> launchArguments;
   final WindowButtonsLayout windowButtons;
+
+  /// Null off the desktop.
+  final UpdateCheck? updates;
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -86,6 +92,10 @@ class _EditorScreenState extends State<EditorScreen> with WindowListener {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _canvasFocus.requestFocus();
       _updateTitle();
+      if (widget.updates case final updates?) {
+        updates.check().ignore();
+        updates.cleanUp().ignore();
+      }
       final pending = await widget.systemOpen.pending(widget.launchArguments);
       if (pending.isNotEmpty) _load(pending.first);
     });
@@ -160,6 +170,37 @@ class _EditorScreenState extends State<EditorScreen> with WindowListener {
 
   @override
   void onWindowLeaveFullScreen() => setState(() => _fullScreen = false);
+
+  /// The app closes for the updater to replace it, so unsaved work is
+  /// handled first, exactly as when closing the window.
+  Future<void> _startUpdate() async {
+    final updates = widget.updates;
+    if (updates == null || !await _confirmDiscard()) return;
+    final presentation = controller.presentation;
+    if (await updates.startUpdater() == LaunchResult.started) {
+      // Windows copies the app for the updater first, and the presentation
+      // may change meanwhile; if the user keeps it open, the updater waits
+      if (!mounted) return;
+      if (!identical(controller.presentation, presentation) &&
+          !await _confirmDiscard()) {
+        return;
+      }
+      _closing = true;
+      await windowManager.destroy();
+      return;
+    }
+    if (!mounted) return;
+    final l10n = UpdaterLocalizations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(l10n.updateLaunchFailed),
+        action: SnackBarAction(
+          label: l10n.updateDownloadPage,
+          onPressed: () => updates.openDownloadPage().ignore(),
+        ),
+      ),
+    );
+  }
 
   void _tell(String message) {
     if (!mounted) return;
@@ -488,6 +529,13 @@ class _EditorScreenState extends State<EditorScreen> with WindowListener {
                 controller: controller,
                 scale: _scale,
                 onZoom: _setZoom,
+                trailing: switch (widget.updates) {
+                  final updates? => UpdateStatusChip(
+                    check: updates,
+                    onUpdate: _startUpdate,
+                  ),
+                  null => null,
+                },
               ),
             ],
           ),

@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Voges Slides
+GenericName=Presentation
+GenericName[pt]=Apresentação
+GenericName[pt_BR]=Apresentação
+GenericName[es]=Presentación
+Comment=Create, edit and present PowerPoint presentations
+Comment[pt]=Crie, edite e apresente apresentações do PowerPoint
+Comment[pt_BR]=Crie, edite e apresente apresentações do PowerPoint
+Comment[es]=Crea, edita y presenta presentaciones de PowerPoint
+Exec=voges-slides %f
+Icon=com.omanoloneto.voges_slides
+Terminal=false
+Categories=Office;Presentation;
+MimeType=application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.openxmlformats-officedocument.presentationml.slideshow;application/vnd.openxmlformats-officedocument.presentationml.template;
+Keywords=presentation;slides;slideshow;powerpoint;pptx;
+Keywords[pt]=apresentação;slides;powerpoint;pptx;
+Keywords[pt_BR]=apresentação;slides;powerpoint;pptx;
+Keywords[es]=presentación;diapositivas;powerpoint;pptx;
+StartupWMClass=com.omanoloneto.voges_slides
