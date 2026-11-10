@@ -1,0 +1,216 @@
+name: Release
+
+# only a tag publishes the release; pull requests and manual runs build the installers to check them
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUTTER_VERSION: 3.41.6
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pubspec.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pubspec
+        name: Version from pubspec
+        run: |
+          VERSION=$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' pubspec.yaml)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::pubspec.yaml says $VERSION, but the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux
+    needs: version
+    # the binary needs the glibc of the system it was built on: built on 22.04, the .deb runs on Debian 12 and Mint 21
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev imagemagick
+      - name: Install Flutter
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      # the signing tool checks the voges_updater commit locked in pubspec.lock
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze
+      - run: flutter test
+      - run: |
+          flutter build linux --release \
+            --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define=VOGES_VERSION="$VERSION"
+      - name: Build the .deb
+        run: |
+          packaging/linux/build_deb.sh "$VERSION" \
+            build/linux/x64/release/bundle voges-slides-linux-amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: voges-slides-linux-amd64.deb
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flutter
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - run: flutter pub get --enforce-lockfile
+      # the helper is built from the voges_updater commit that pub fetched,
+      # copied out of the pub cache so the build doesn't write into it
+      - name: Build Voges Updater
+        run: |
+          source=$(python3 - <<'PY'
+          import json, pathlib, urllib.parse, urllib.request
+          config = pathlib.Path('.dart_tool/package_config.json').resolve()
+          for package in json.loads(config.read_text())['packages']:
+              if package['name'] == 'voges_updater':
+                  uri = urllib.parse.urljoin(config.as_uri(), package['rootUri'])
+                  print(urllib.request.url2pathname(urllib.parse.urlparse(uri).path))
+          PY
+          )
+          test -f "$source/pubspec.yaml"
+          cp -R "$source" "$RUNNER_TEMP/voges_updater"
+          chmod -R u+w "$RUNNER_TEMP/voges_updater"
+          cd "$RUNNER_TEMP/voges_updater"
+          flutter pub get --enforce-lockfile
+          flutter build macos --release \
+            --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER"
+      - run: |
+          flutter build macos --release \
+            --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define=VOGES_VERSION="$VERSION"
+      - name: Embed Voges Updater
+        run: |
+          packaging/macos/embed_updater.sh \
+            "$RUNNER_TEMP/voges_updater/build/macos/Build/Products/Release/Voges Updater.app" \
+            "build/macos/Build/Products/Release/Voges Slides.app" \
+            macos/Runner/Release.entitlements
+      - name: Build the .dmg
+        run: |
+          app="build/macos/Build/Products/Release/Voges Slides.app"
+          codesign --verify --deep --strict "$app"
+          packaging/macos/build_dmg.sh "$app" VogesSlides-macos.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: VogesSlides-macos.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flutter
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:FLUTTER_VERSION `
+            https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\flutter\bin"
+      - run: flutter pub get --enforce-lockfile
+      - name: Build
+        shell: pwsh
+        run: |
+          flutter build windows --release `
+            --build-name $env:VERSION --build-number $env:GITHUB_RUN_NUMBER `
+            --dart-define=VOGES_VERSION=$env:VERSION
+      # a fresh Windows install does not have the Visual C++ runtime
+      - name: Visual C++ runtime
+        shell: pwsh
+        run: |
+          foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            Copy-Item "$env:SystemRoot\System32\$dll" build\windows\x64\runner\Release\
+          }
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          & $iscc "/DAppVersion=$env:VERSION" packaging\windows\voges_slides.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/installer/VogesSlides-windows-setup.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    if: github.ref_type == 'tag'
+    needs: [version, linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA-256 of the files
+        working-directory: dist
+        run: |
+          sha256sum VogesSlides-macos.dmg VogesSlides-windows-setup.exe \
+            voges-slides-linux-amd64.deb > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      # GitHub attests that this workflow made SHA256SUMS.txt from this tag:
+      # the signing tool refuses a draft whose files were swapped afterwards
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/SHA256SUMS.txt
+      # the release stays a draft until the owner signs SHA256SUMS.txt with
+      # the key the apps trust, which never leaves the owner's Mac
+      - name: Create the draft release
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --draft --verify-tag \
+            --title "Voges Slides $VERSION" --notes-file packaging/release-notes.md \
+            dist/VogesSlides-macos.dmg dist/VogesSlides-windows-setup.exe \
+            dist/voges-slides-linux-amd64.deb dist/SHA256SUMS.txt
+          {
+            echo "Draft created. Sign and publish it on the owner's Mac, from a voges-word checkout:"
+            echo
+            echo '```'
+            echo "cd packages/voges_updater"
+            echo "dart run tool/release_signing.dart publish $GITHUB_REPOSITORY $GITHUB_REF_NAME --clone <path to the voges-slides clone>"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
