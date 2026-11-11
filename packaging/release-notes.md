@@ -1,6 +1,10 @@
 Voges Slides: simple presentations for macOS, Windows and Linux. Part of the Voges suite, next to Voges Word, Voges Pencil and Voges Tables.
 
-## What's in Voges Slides 1.0.0
+## What's new in Voges Slides 1.0.1
+
+- **Linux:** the window shows the app's icon in Alt+Tab and in window lists.
+
+## What Voges Slides does
 
 - **Slides:** four layouts (title slide, title and content, title only, blank); add, duplicate, delete and reorder slides in the panel on the left, and give each one, or all of them, a background color.
 - **Text:** font, size, bold, italic, underline, strikethrough and color; alignment; bullets and numbering with levels; text at the top, middle or bottom of its shape.
